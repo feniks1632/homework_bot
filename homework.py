@@ -1,35 +1,46 @@
 import json
 import logging
 import os
-import sys
 import time
 from logging.handlers import RotatingFileHandler
+
 
 import requests
 import telegram
 from dotenv import load_dotenv
+
+
+from exception import ConnectException, \
+    TimeoutException, \
+    BadRequestException, \
+    JSONDecodeException
 
 env_variables = os.getenv
 PRACTICUM_TOKEN = env_variables('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = env_variables('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = env_variables('TELEGRAM_CHAT_ID')
 
+
 load_dotenv()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = os.path.join(BASE_DIR, 'telegram_bot.log')
 
+
 logger = logging.getLogger(__name__)
-_log_format = ('%(asctime)s - [%(levelname)s] - %(name)s - '
-               '(%(filename)s).%(funcName)s(%(lineno)d) - %(message)s')
+log_format = ('%(asctime)s - [%(levelname)s] - %(name)s - '
+              '(%(filename)s).%(funcName)s(%(lineno)d) - %(message)s')
+
 logging.basicConfig(
     level=logging.INFO,
-    format=_log_format
+    format=log_format
 )
+
 
 file_handler = RotatingFileHandler(LOG_FILE, maxBytes=5000000, backupCount=5)
 stream_handler = logging.StreamHandler()
 logger.addHandler(file_handler)
 logger.addHandler(stream_handler)
+
 
 logger.debug('Бот начинает свою работу!')
 
@@ -37,6 +48,7 @@ logger.debug('Бот начинает свою работу!')
 RETRY_PERIOD = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
+
 
 HOMEWORK_VERDICTS = {
     'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
@@ -56,9 +68,9 @@ def check_tokens():
         logger.critical('Нет токена TELEGRAM_CHAT_ID')
     if all((PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)):
         logger.debug('Все токены успешно получены')
-        return None
+        return
     logger.critical('Приостанавливаем программу')
-    sys.exit('Не найден токен')
+    raise Exception('Не все токены присутствуют')
 
 
 def send_message(bot, message):
@@ -74,48 +86,32 @@ def send_message(bot, message):
         )
 
 
-def log_send_err_message(exception, err_description):
-    """Отправка сообщения об ошибке в лог и в Телеграмм."""
-    message = ('В работе бота произошла ошибка: '
-               f'{exception} {err_description}')
-    logger.error(message)
-    logger.info('Бот отправляет в Телеграм сообщение '
-                'об ошибке в своей работе.')
-    send_message(message)
-
-
 def get_api_answer(timestamp):
     """Запрос АПИ домашки.
     На вход - момент времени в Unix-time.
     На выход - словарь с последней домашкой, если получен,
     или пустой словарь, если были ошибки в соединении или ответе.
     """
-    payload = {'from_date': timestamp}
+    params = {'from_date': timestamp}
     homework_valid_json = dict()
     try:
         response = requests.get(
             ENDPOINT,
             headers=HEADERS,
-            params=payload
+            params=params
         )
         if response.status_code != requests.codes.ok:
             message = 'Сервер домашки не вернул статус 200.'
-            log_send_err_message('Not HTTPStatus.OK', message)
             raise requests.exceptions.HTTPError(message)
-
         homework_valid_json = response.json()
-    except requests.ConnectionError as e:
-        message = 'Ошибка соединения.'
-        log_send_err_message(e, message)
-    except requests.Timeout as e:
-        message = f'Ошибка Timeout-а. {e}'
-        log_send_err_message(e, message)
-    except requests.RequestException as e:
-        message = f'Ошибка отправки запроса. {e}'
-        log_send_err_message(e, message)
-    except json.JSONDecodeError as e:
-        message = 'Не удалось прочитать json-объект.'
-        log_send_err_message(e, message)
+    except requests.ConnectionError:
+        raise ConnectException()
+    except requests.Timeout:
+        raise TimeoutException()
+    except requests.RequestException:
+        raise BadRequestException()
+    except json.JSONDecodeError:
+        raise JSONDecodeException()
     return homework_valid_json
 
 
@@ -128,7 +124,6 @@ def check_response(response):
     homeworks = response.get('homeworks')
     if not isinstance(homeworks, list):
         raise TypeError('Неверный формат homeworks, ожидаем список')
-    return homeworks[0]
 
 
 def parse_status(homework):
@@ -166,23 +161,30 @@ def main():
     check_tokens()
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     previous_exception = None
-    timestamp = int(time.time())
     while True:
         try:
+            timestamp = int(time.time())
             request_query = get_api_answer(timestamp=timestamp)
-            response = check_response(request_query)
-            if response:
-                get_message = parse_status(response)
-                send_message(bot=bot, message=get_message)
+            check_response(request_query)
+            last_homework = request_query.get('homeworks')[0]
+            new_message = parse_status(last_homework)
+            send_message(bot=bot, message=new_message)
             previous_exception = None
         except Exception as error:
+            message = ('В работе бота произошла ошибка: '
+                       f'{error}')
+            logger.error(message)
+            logger.info('Бот отправляет в Телеграм сообщение '
+                        'об ошибке в своей работе.')
+            send_message(message)
+
             if str(previous_exception) != str(error):
-                send_message(bot=bot, message=str(error))
+                send_message(message)
             previous_exception = error
-            logger.exception(error)
         finally:
             time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
+
     main()
