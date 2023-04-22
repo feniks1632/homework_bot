@@ -10,18 +10,18 @@ import telegram
 from dotenv import load_dotenv
 
 
-from exception import ConnectException, \
-    TimeoutException, \
-    BadRequestException, \
-    JSONDecodeException
-
-env_variables = os.getenv
-PRACTICUM_TOKEN = env_variables('PRACTICUM_TOKEN')
-TELEGRAM_TOKEN = env_variables('TELEGRAM_TOKEN')
-TELEGRAM_CHAT_ID = env_variables('TELEGRAM_CHAT_ID')
+from exception import (
+    APIRequestFail,
+    NotTokenException,
+)
 
 
 load_dotenv()
+PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = os.path.join(BASE_DIR, 'telegram_bot.log')
 
@@ -57,20 +57,20 @@ HOMEWORK_VERDICTS = {
 }
 
 
-def check_tokens():
+def check_tokens() -> bool:
     """Проверка загрузки переменных из .env."""
     logger.debug('Загружаем переменные из .env')
     if not PRACTICUM_TOKEN:
         logger.critical('Нет токена PRACTICUM_TOKEN')
+        return False
     if not TELEGRAM_TOKEN:
         logger.critical('Нет токена TELEGRAM_TOKEN')
+        return False
     if not TELEGRAM_CHAT_ID:
         logger.critical('Нет токена TELEGRAM_CHAT_ID')
-    if all((PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)):
-        logger.debug('Все токены успешно получены')
-        return
-    logger.critical('Приостанавливаем программу')
-    raise Exception('Не все токены присутствуют')
+        return False
+    logger.debug('Все токены успешно получены')
+    return True
 
 
 def send_message(bot, message):
@@ -104,14 +104,10 @@ def get_api_answer(timestamp):
             message = 'Сервер домашки не вернул статус 200.'
             raise requests.exceptions.HTTPError(message)
         homework_valid_json = response.json()
-    except requests.ConnectionError:
-        raise ConnectException()
-    except requests.Timeout:
-        raise TimeoutException()
-    except requests.RequestException:
-        raise BadRequestException()
-    except json.JSONDecodeError:
-        raise JSONDecodeException()
+    except requests.exceptions.RequestException as e:
+        raise APIRequestFail(f'Ошибка API {e}')
+    except json.JSONDecodeError as e:
+        raise APIRequestFail(f'Ошибка json {e}')
     return homework_valid_json
 
 
@@ -119,17 +115,16 @@ def check_response(response):
     """Функция для проверки существования ключа в ответе."""
     if not isinstance(response, dict):
         raise TypeError('Неверный формат данных, ожидаем словарь')
-    if response.get('homeworks') is None:
+    if (homeworks := response.get('homeworks')) is None:
         raise KeyError('В ответе API нет ключа homeworks')
-    homeworks = response.get('homeworks')
     if not isinstance(homeworks, list):
         raise TypeError('Неверный формат homeworks, ожидаем список')
 
 
 def parse_status(homework):
     """Функция для проверки существования ключа в ответе."""
-    logger.debug(f'Парсим данные {homework}')
-    current_status_homework = homework.get('status')
+    logger.debug('Парсим данные домашки')
+    (current_status_homework := homework.get('status'))
     logger.debug(f'Текущий статус работы {current_status_homework}')
     if (current_status_homework is None) or (
         current_status_homework not in HOMEWORK_VERDICTS
@@ -158,30 +153,46 @@ def main():
     10 - Ставим паузу на 10 минут
     11 - Обрабатываем исключения, при повторной ошибке сообщение не отправляем
     """
-    check_tokens()
+    if check_tokens():
+        logger.info('Токены впорядке')
+    else:
+        logger.critical(
+            'Не обнаружен один из ключей PRACTICUM_TOKEN,'
+            'TELEGRAM_TOKEN, TELEGRAM_CHAT_ID'
+        )
+        raise NotTokenException(
+            'Нет токена.'
+        )
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     previous_exception = None
     while True:
         try:
             timestamp = int(time.time())
-            request_query = get_api_answer(timestamp=timestamp)
-            check_response(request_query)
-            last_homework = request_query.get('homeworks')[0]
-            new_message = parse_status(last_homework)
-            send_message(bot=bot, message=new_message)
-            previous_exception = None
+            response = get_api_answer(timestamp=timestamp)
+            check_response(response)
+            if 'homeworks' in response and len(response['homeworks']) > 0:
+                last_homework = response['homeworks'][0]
+                new_message = parse_status(last_homework)
+                send_message(bot=bot, message=new_message)
+                previous_exception = None
         except Exception as error:
             message = ('В работе бота произошла ошибка: '
                        f'{error}')
-            logger.error(message)
+            logger.error()
             logger.info('Бот отправляет в Телеграм сообщение '
                         'об ошибке в своей работе.')
-            send_message(message)
+            send_message(bot, message)
 
             if str(previous_exception) != str(error):
-                send_message(message)
+                send_message(bot, message)
             previous_exception = error
         finally:
+            mins = int(RETRY_PERIOD / 60)
+            message = (
+                f'Нет результатов проверки домашнего задания. '
+                f'Повторим запрос через {mins} минут'
+            )
+            send_message(bot, message)
             time.sleep(RETRY_PERIOD)
 
 

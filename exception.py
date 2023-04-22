@@ -1,22 +1,10 @@
-class ConnectException(Exception):
-    """Ошибка соединения."""
+class APIRequestFail(Exception):
+    """Ошибка при запросе к API."""
 
     pass
 
 
-class TimeoutException(Exception):
-    """Ошибка таймаута."""
-
-    pass
-
-
-class BadRequestException(Exception):
-    """Ошибка отправки запроса."""
-
-    pass
-
-
-class JSONDecodeException(Exception):
-    """Не удалось прочитать json-объект."""
+class NotTokenException(Exception):
+    """Исключение - нет всех токенов."""
 
     pass
