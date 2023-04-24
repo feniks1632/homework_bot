@@ -57,20 +57,11 @@ HOMEWORK_VERDICTS = {
 }
 
 
-def check_tokens() -> bool:
+def check_tokens():
     """Проверка загрузки переменных из .env."""
     logger.debug('Загружаем переменные из .env')
-    if not PRACTICUM_TOKEN:
-        logger.critical('Нет токена PRACTICUM_TOKEN')
-        return False
-    if not TELEGRAM_TOKEN:
-        logger.critical('Нет токена TELEGRAM_TOKEN')
-        return False
-    if not TELEGRAM_CHAT_ID:
-        logger.critical('Нет токена TELEGRAM_CHAT_ID')
-        return False
-    logger.debug('Все токены успешно получены')
-    return True
+    tokens: list = [PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]
+    return all(tokens)
 
 
 def send_message(bot, message):
@@ -81,7 +72,7 @@ def send_message(bot, message):
         logger.error('Ошибка при отправке сообщения в телеграмм')
     else:
         logger.debug(
-            f'Бот отправил сообщение: {message}\n'
+            f'Бот отправил сообщение \n'
             f'пользователю с id: {TELEGRAM_CHAT_ID}'
         )
 
@@ -165,9 +156,9 @@ def main():
         )
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     previous_exception = None
+    timestamp = 0
     while True:
         try:
-            timestamp = int(time.time())
             response = get_api_answer(timestamp=timestamp)
             check_response(response)
             if 'homeworks' in response and len(response['homeworks']) > 0:
@@ -175,27 +166,19 @@ def main():
                 new_message = parse_status(last_homework)
                 send_message(bot=bot, message=new_message)
                 previous_exception = None
+                timestamp = response['current_date']
         except Exception as error:
             message = ('В работе бота произошла ошибка: '
                        f'{error}')
-            logger.error()
             logger.info('Бот отправляет в Телеграм сообщение '
                         'об ошибке в своей работе.')
             send_message(bot, message)
-
             if str(previous_exception) != str(error):
                 send_message(bot, message)
             previous_exception = error
         finally:
-            mins = int(RETRY_PERIOD / 60)
-            message = (
-                f'Нет результатов проверки домашнего задания. '
-                f'Повторим запрос через {mins} минут'
-            )
-            send_message(bot, message)
             time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
-
     main()
