@@ -60,7 +60,7 @@ HOMEWORK_VERDICTS = {
 def check_tokens():
     """Проверка загрузки переменных из .env."""
     logger.debug('Загружаем переменные из .env')
-    tokens: list = [PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]
+    tokens = [PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]
     return all(tokens)
 
 
@@ -84,7 +84,6 @@ def get_api_answer(timestamp):
     или пустой словарь, если были ошибки в соединении или ответе.
     """
     params = {'from_date': timestamp}
-    homework_valid_json = dict()
     try:
         response = requests.get(
             ENDPOINT,
@@ -144,9 +143,7 @@ def main():
     10 - Ставим паузу на 10 минут
     11 - Обрабатываем исключения, при повторной ошибке сообщение не отправляем
     """
-    if check_tokens():
-        logger.info('Токены впорядке')
-    else:
+    if not check_tokens():
         logger.critical(
             'Не обнаружен один из ключей PRACTICUM_TOKEN,'
             'TELEGRAM_TOKEN, TELEGRAM_CHAT_ID'
@@ -154,6 +151,7 @@ def main():
         raise NotTokenException(
             'Нет токена.'
         )
+    logger.info('Токены впорядке')
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     previous_exception = None
     timestamp = 0
@@ -161,12 +159,14 @@ def main():
         try:
             response = get_api_answer(timestamp=timestamp)
             check_response(response)
-            if 'homeworks' in response and len(response['homeworks']) > 0:
-                last_homework = response['homeworks'][0]
-                new_message = parse_status(last_homework)
-                send_message(bot=bot, message=new_message)
-                previous_exception = None
-                timestamp = response['current_date']
+            last_homework = response['homeworks'][0]
+            if not last_homework:
+                logger.info('Нет домашек.')
+                continue
+            new_message = parse_status(last_homework)
+            send_message(bot=bot, message=new_message)
+            previous_exception = None
+            timestamp = response['current_date']
         except Exception as error:
             message = ('В работе бота произошла ошибка: '
                        f'{error}')
