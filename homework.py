@@ -114,17 +114,17 @@ def check_response(response):
 def parse_status(homework):
     """Функция для проверки существования ключа в ответе."""
     logger.debug('Парсим данные домашки')
-    (current_status_homework := homework.get('status'))
-    logger.debug(f'Текущий статус работы {current_status_homework}')
-    if (current_status_homework is None) or (
+    if not (
+        current_status_homework := homework.get('status')
+    ) or (
         current_status_homework not in HOMEWORK_VERDICTS
     ):
-        raise KeyError(f'Ошибка с ключом {current_status_homework}')
-    verdict = HOMEWORK_VERDICTS.get(homework.get('status'))
-    homework_name = homework.get('homework_name')
-    if not homework_name:
+        raise KeyError('Ошибка с ключом "current_status_homework"')
+    logger.debug(f'Текущий статус работы: {current_status_homework}')
+    if not (homework_name := homework.get('homework_name')):
         raise KeyError('В домашней работе нет ключа "homework_name"')
     logger.debug(f'Имя текущей работы - {homework_name}')
+    verdict = HOMEWORK_VERDICTS.get(current_status_homework)
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
@@ -159,11 +159,11 @@ def main():
         try:
             response = get_api_answer(timestamp=timestamp)
             check_response(response)
-            last_homework = response['homeworks'][0]
+            last_homework = response['homeworks']
             if not last_homework:
                 logger.info('Нет домашек.')
                 continue
-            new_message = parse_status(last_homework)
+            new_message = parse_status(last_homework[0])
             send_message(bot=bot, message=new_message)
             previous_exception = None
             timestamp = response['current_date']
